@@ -1,0 +1,11 @@
+{
+    "hidden_size": 1024,
+    "weight_decay_cl": 5.4193493737109954e-05,
+    "weight_decay_encoder": 0.09498269479585057,
+    "latent_size": 256,
+    "num_layers": 1,
+    "dropout_prob": 0.29541730323647875,
+    "layer_norm": false,
+    "embed_size": 256,
+    "AUC": 0.7040054654755473
+}

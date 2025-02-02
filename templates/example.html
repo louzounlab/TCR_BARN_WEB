@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+
+{% block head %}
+    <link rel="stylesheet" href="/static/index.css">
+    <style>
+        .main-div {
+            margin: auto;
+            width: 80%;
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+    <div class="container page-top">
+        <br>
+        <h1>Example</h1>
+    </div>
+    <br>
+    <div class="container">
+        <p>To predict the binding probability for a given TCR alpha and beta sequence:
+        <p>Alpha chain:</p>
+        <p>CDR3 sequence - CGTETPENDMRF</p>
+        <p>V Jene - TRAV30</p>
+        <p>J Jene - TRAJ43</p>
+        <p>Beta chain:</p>
+        <p>CDR3 sequence - CASSDRDRGWDEQYF</p>
+        <p>V Jene - TRBV5-1</p>
+        <p>J Jene - TRBJ2-7</p>
+        <p>The data type is All T cells dataset.</p>
+    </div>
+{% endblock %}
+

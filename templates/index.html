@@ -1,0 +1,118 @@
+{% extends 'base.html' %}
+
+{% block head %}
+<style>
+    body {
+        background-color: #f0f0f0; /* Light gray background color */
+        color: #333333; /* Dark gray text color */
+    }
+
+    .glow-button {
+        background-color: #3498db; /* Default background color */
+        color: #ffffff; /* Default text color */
+        padding: 15px 20px;
+        font-size: 16px;
+        border: none;
+        cursor: pointer;
+        outline: none;
+        transition: background-color 0.3s, box-shadow 0.3s;
+    }
+
+    .glow-button:hover {
+        background-color: #2980b9; /* Hover background color */
+    }
+
+    .glow-button.selected {
+        background-color: plum; /* Selected background color */
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.5); /* Add a box shadow when selected */
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h4 style="color: red; text-align: center;">{{ error }}</h4>
+<br>
+<div class="text-center">
+    {% if error %}
+        <h3>The following error occurred: {{ error }}</h3>
+        <br>
+        <br>
+    {% endif %}
+    <h1>Online calculator for prediction of Alpha and Beta chains to bind</h1>
+</div>
+<div class="container text-center">
+    <br>
+    <h4>Please fill the following details:</h4>
+    <br>
+    <form action="/process_form" method="post" enctype="multipart/form-data">
+        <br>
+        <div class="row">
+            <div class="col">
+                <label for="tcra">TCRA</label>
+                <br>
+                <input type="str" id="tcra" name="tcra">
+            </div>
+            <div class="col">
+                <label for="va">V alpha</label>
+                <br>
+                <input type="str" id="va" name="va">
+            </div>
+            <div class="col">
+                <label for="ja">J alpha</label>
+                <br>
+                <input type="str" id="ja" name="ja">
+            </div>
+        </div>
+        <br>
+        <br>
+        <div class="row">
+            <div class="col">
+                <label for="tcrb">TCRB</label>
+                <br>
+                <input type="str" id="tcrb" name="tcrb">
+            </div>
+            <div class="col">
+                <label for="vb">V beta</label>
+                <br>
+                <input type="str" id="vb" name="vb">
+            </div>
+            <div class="col">
+                <label for="jb">J beta</label>
+                <br>
+                <input type="str" id="jb" name="jb">
+            </div>
+        </div>
+        <br>
+        <div class="col">
+            <label for="data_type">Type of data</label>
+            <br>
+            <select id="data_type" name="data_type">
+                <option value="All T cells">All T cells</option>
+                <option value="pMHC-I" selected>pMHC-I</option>
+            </select>
+        </div>
+   
+        <br>
+        <br>
+
+        <button type="submit">Submit</button>
+        <br>
+    </form>
+    {% if model_output %}
+        <br>
+        <div class="row">
+            <div class="col">
+                <label class="badge text-bg-primary" style="font-size: 20px;">The probability for given Alpha and Beta chains to pair is:<br><br>{{ model_output[0] }}</label>
+            </div>
+            {% if model_output | length == 2 %}
+                <div class="col">
+                    <label class="badge text-bg-secondary" style="font-size: 20px;"><br>The pairing probability falls within the {{ model_output[1] }}th percentile.<br><br></label>
+                </div>
+            {% endif %}
+        </div>
+        <br>
+    {% endif %}
+    <br>
+    <br>
+</div>
+{% endblock %}
