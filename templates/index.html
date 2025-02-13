@@ -48,7 +48,7 @@
         <br>
         <div class="row">
             <div class="col">
-                <label for="tcra">TCRA</label>
+                <label for="tcra">CDR3 alpha</label>
                 <br>
                 <input type="str" id="tcra" name="tcra">
             </div>
@@ -67,7 +67,7 @@
         <br>
         <div class="row">
             <div class="col">
-                <label for="tcrb">TCRB</label>
+                <label for="tcrb">CDR3 beta</label>
                 <br>
                 <input type="str" id="tcrb" name="tcrb">
             </div>
@@ -91,7 +91,7 @@
                 <option value="pMHC-I" selected>pMHC-I</option>
             </select>
         </div>
-   
+
         <br>
         <br>
 
@@ -100,15 +100,25 @@
     </form>
     {% if model_output %}
         <br>
-        <div class="row">
+        <div class="row text-center">
             <div class="col">
-                <label class="badge text-bg-primary" style="font-size: 20px;">The probability for given Alpha and Beta chains to pair is:<br><br>{{ model_output[0] }}</label>
+                <p style="font-size: 22px; font-weight: bold;">The score:</p>
+                <div style="width: 300px; height: 40px; background: linear-gradient(to left, green, yellow, red); border: 2px solid black; position: relative; margin: auto;">
+                    <div style="width: 4px; height: 100%; background-color: black; position: absolute; left: calc({{ model_output[0] * 100 }}% - 2px);"></div>
+                </div>
+                <p style="font-size: 20px;">The score of given Alpha and Beta chains is {{ model_output[0]}}%.</p>
             </div>
             {% if model_output | length == 2 %}
-                <div class="col">
-                    <label class="badge text-bg-secondary" style="font-size: 20px;"><br>The pairing probability falls within the {{ model_output[1] }}th percentile.<br><br></label>
+            <div class="col">
+                <p style="font-size: 22px; font-weight: bold;">The percentile:</p>
+                <div style="width: 300px; height: 40px; background: linear-gradient(to left, green, yellow, red); border: 2px solid black; position: relative; margin: auto;">
+                    <div style="width: 4px; height: 100%; background-color: black; position: absolute; left: calc({{ model_output[1] }}% - 2px);"></div>
                 </div>
+                <p style="font-size: 20px;">The pairing probability falls within the {{ model_output[1] }}th percentile.</p>
+            </div>
             {% endif %}
+
+
         </div>
         <br>
     {% endif %}
