@@ -106,25 +106,17 @@ class FFNN(nn.Module):
         dropout_prob (float, optional): Dropout probability. Default is 0.
         layer_norm (bool, optional): Whether to apply layer normalization. Default is False.
     """
-    def __init__(self, input_dim, dropout_prob=0, layer_norm=False):
+    def __init__(self, input_dim, dropout_prob_cl=0, norm_cl=False):
         super(FFNN, self).__init__()
         self.fc1 = nn.Linear(input_dim, 256)
         self.fc2 = nn.Linear(256, 64)
         self.fc3 = nn.Linear(64, 1)
-        self.dropout = nn.Dropout(dropout_prob)
-        self.norm1 = nn.LayerNorm(256) if layer_norm else nn.Identity()
-        self.norm2 = nn.LayerNorm(64) if layer_norm else nn.Identity()
+        self.dropout = nn.Dropout(dropout_prob_cl)
+        self.norm1 = nn.BatchNorm1d(256) if norm_cl else nn.Identity()
+        self.norm2 = nn.BatchNorm1d(64) if norm_cl else nn.Identity()
 
     def forward(self, x):
-        """
-        Forward pass for the FFNN.
-
-        Args:
-            x (Tensor): Input tensor of shape (batch_size, input_dim).
-
-        Returns:
-            x (Tensor): Output tensor of shape (batch_size, 1).
-        """
+        x = x[-1]
         x = torch.relu(self.norm1(self.fc1(x)))
         x = self.dropout(x)
         x = torch.relu(self.norm2(self.fc2(x)))

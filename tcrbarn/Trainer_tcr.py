@@ -100,7 +100,7 @@ def pass_models(alpha, beta, alpha_model, beta_model, model_type, va, vb, ja, jb
 
 
 def train_model(model, model_type, alpha_input, beta_input, data_loader, test_loader, DEVICE, base_folder,
-                batch_size, acid2int, weight_decay_encoder, weight_decay_cl, patience=5, min_delta=0.0001):
+                batch_size, acid2int, weight_decay_encoder, weight_decay_cl=None, losses_weight=50, patience=10, min_delta=0.0001):
     """
     Train the model with the given inputs and parameters.
     Args:
@@ -118,22 +118,29 @@ def train_model(model, model_type, alpha_input, beta_input, data_loader, test_lo
         weight_decay_cl (float): Weight decay for the model optimizer.
         patience (int, optional): Number of epochs to wait for improvement before early stopping. Default is 5.
         min_delta (float, optional): Minimum change in the monitored quantity to qualify as an improvement.
+        losses_weight (float, optional): weight of predict loss.
         Default is 0.0001.
     """
     criterion = nn.BCEWithLogitsLoss()
     encoder_alpha, decoder_alpha = alpha_input
     encoder_beta, decoder_beta = beta_input
 
-    model_optimizer = optim.AdamW(model.parameters(), weight_decay=weight_decay_cl)
-    encoder_alpha_optimizer = optim.AdamW(encoder_alpha.parameters(), weight_decay=weight_decay_encoder)
-    encoder_beta_optimizer = optim.AdamW(encoder_beta.parameters(), weight_decay=weight_decay_encoder)
-    decoder_alpha_optimizer = optim.AdamW(decoder_alpha.parameters(), weight_decay=weight_decay_encoder)
-    decoder_beta_optimizer = optim.AdamW(decoder_beta.parameters(), weight_decay=weight_decay_encoder)
+    model_optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=weight_decay_cl)
+    encoder_alpha_optimizer = optim.AdamW(encoder_alpha.parameters(), lr=1e-4, weight_decay=weight_decay_encoder)
+    encoder_beta_optimizer = optim.AdamW(encoder_beta.parameters(), lr=1e-4, weight_decay=weight_decay_encoder)
+    decoder_alpha_optimizer = optim.AdamW(decoder_alpha.parameters(), lr=1e-4, weight_decay=weight_decay_encoder)
+    decoder_beta_optimizer = optim.AdamW(decoder_beta.parameters(), lr=1e-4, weight_decay=weight_decay_encoder)
 
-    num_epochs = 40
+    num_epochs = 100
     train_losses = []
+    alpha_losses = []
+    beta_losses = []
+    predict_losses = []
     if test_loader is not None:
         test_losses = []
+        test_alpha_losses = []
+        test_beta_losses = []
+        test_predict_losses = []
         best_test_loss = float('inf')
         epochs_without_improvement = 0
 
@@ -146,6 +153,9 @@ def train_model(model, model_type, alpha_input, beta_input, data_loader, test_lo
         decoder_beta.train()
 
         batch_train_losses = []
+        batch_alpha_losses = []
+        batch_beta_losses = []
+        batch_predict_losses = []
 
         for i, (alpha, beta, va, vb, ja, jb, label, stage1_output) in enumerate(data_loader):
             alpha = alpha.to(DEVICE)
@@ -169,8 +179,12 @@ def train_model(model, model_type, alpha_input, beta_input, data_loader, test_lo
                                               DEVICE, stage1_output)
 
             outputs = model(concatenated_inputs)
-            predict_loss = criterion(outputs.view(-1), label) * 50
+            predict_loss = criterion(outputs.view(-1), label) * losses_weight
             loss = predict_loss + loss_alpha + loss_beta
+            batch_train_losses.append(loss.item())
+            batch_alpha_losses.append(loss_alpha.item())
+            batch_beta_losses.append(loss_beta.item())
+            batch_predict_losses.append(predict_loss.item())
             if i % 100 == 0:
                 print(f'Epoch {epoch}, Batch {i}, Alpha Loss: {loss_alpha.item():.4f}, '
                       f'Beta Loss: {loss_beta.item():.4f}, Predict Loss: {predict_loss.item():.4f}')
@@ -184,10 +198,14 @@ def train_model(model, model_type, alpha_input, beta_input, data_loader, test_lo
 
             model_optimizer.step()
 
-            batch_train_losses.append(loss.item())
-
         epoch_train_loss = sum(batch_train_losses) / len(batch_train_losses)
+        epoch_alpha_loss = sum(batch_alpha_losses) / len(batch_alpha_losses)
+        epoch_beta_loss = sum(batch_beta_losses) / len(batch_beta_losses)
+        epoch_predict_loss = sum(batch_predict_losses) / len(batch_predict_losses)
         train_losses.append(epoch_train_loss)
+        alpha_losses.append(epoch_alpha_loss)
+        beta_losses.append(epoch_beta_loss)
+        predict_losses.append(epoch_predict_loss)
 
         if test_loader is not None:
             # Testing
@@ -197,6 +215,10 @@ def train_model(model, model_type, alpha_input, beta_input, data_loader, test_lo
             decoder_alpha.eval()
             decoder_beta.eval()
             batch_test_losses = []
+            batch_test_alpha_losses = []
+            batch_test_beta_losses = []
+            batch_test_predict_losses = []
+
             with torch.no_grad():
                 for alpha, beta, va, vb, ja, jb, label, stage1 in test_loader:
                     alpha = alpha.to(DEVICE)
@@ -212,12 +234,22 @@ def train_model(model, model_type, alpha_input, beta_input, data_loader, test_lo
                                                       jb, DEVICE, stage1)
 
                     outputs = model(concatenated_inputs)
-                    predict_loss = criterion(outputs.view(-1), label) * 50
+                    predict_loss = criterion(outputs.view(-1), label) * losses_weight
                     loss = predict_loss + loss_alpha + loss_beta
 
                     batch_test_losses.append(loss.item())
+                    batch_test_alpha_losses.append(loss_alpha.item())
+                    batch_test_beta_losses.append(loss_beta.item())
+                    batch_test_predict_losses.append(predict_loss.item())
+
             epoch_test_loss = sum(batch_test_losses) / len(batch_test_losses)
+            epoch_test_alpha_loss = sum(batch_test_alpha_losses) / len(batch_test_alpha_losses)
+            epoch_test_beta_loss = sum(batch_test_beta_losses) / len(batch_test_beta_losses)
+            epoch_test_predict_loss = sum(batch_test_predict_losses) / len(batch_test_predict_losses)
             test_losses.append(epoch_test_loss)
+            test_alpha_losses.append(epoch_test_alpha_loss)
+            test_beta_losses.append(epoch_test_beta_loss)
+            test_predict_losses.append(epoch_test_predict_loss)
             print(f'Epoch [{epoch + 1}/{num_epochs}], Train Loss: {epoch_train_loss}, Test Loss: {epoch_test_loss}')
             # Check for improvement in test loss
             if epoch_test_loss < best_test_loss - min_delta:
@@ -234,6 +266,8 @@ def train_model(model, model_type, alpha_input, beta_input, data_loader, test_lo
 
         else:
             print(f'Epoch [{epoch + 1}/{num_epochs}], Train Loss: {epoch_train_loss}')
+            print(f'Epoch {epoch + 1}, Alpha Loss: {epoch_alpha_loss:.4f}, '
+                  f'Beta Loss: {epoch_beta_loss:.4f}, Predict Loss: {epoch_predict_loss:.4f}')
 
     # Plotting the loss after training
     plt.figure(figsize=(10, 5))
@@ -242,9 +276,25 @@ def train_model(model, model_type, alpha_input, beta_input, data_loader, test_lo
         plt.plot(test_losses, label="Test Loss")
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
+    plt.yscale("log")
     plt.title("Training and Test Loss Over Epochs")
     plt.legend()
     save_plot_with_incremental_filename(base_folder, 'loss_plot.png')
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(alpha_losses, label="Alpha Loss")
+    plt.plot(beta_losses, label="Beta Loss")
+    plt.plot(predict_losses, label="Predict Loss")
+    if test_loader is not None:
+        plt.plot(test_alpha_losses, label="Alpha test Loss")
+        plt.plot(test_beta_losses, label="Beta test Loss")
+        plt.plot(test_predict_losses, label="Predict test Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.yscale("log")
+    plt.title("Training and Test Loss Over Epochs")
+    plt.legend()
+    save_plot_with_incremental_filename(base_folder, 'new_plot_parts.png')
 
 
 def merge_pass(sequence, encoder, decoder, DEVICE, batch_size, acid2int):

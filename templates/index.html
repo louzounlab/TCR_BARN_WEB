@@ -83,15 +83,8 @@
             </div>
         </div>
         <br>
-        <div class="col">
-            <label for="data_type">Type of data</label>
-            <br>
-            <select id="data_type" name="data_type">
-                <option value="All T cells">All T cells</option>
-                <option value="pMHC-I" selected>pMHC-I</option>
-            </select>
-        </div>
 
+   
         <br>
         <br>
 
@@ -108,21 +101,12 @@
                 </div>
                 <p style="font-size: 20px;">The score of given Alpha and Beta chains is {{ model_output[0]}}%.</p>
             </div>
-            {% if model_output | length == 2 %}
-            <div class="col">
-                <p style="font-size: 22px; font-weight: bold;">The percentile:</p>
-                <div style="width: 300px; height: 40px; background: linear-gradient(to left, green, yellow, red); border: 2px solid black; position: relative; margin: auto;">
-                    <div style="width: 4px; height: 100%; background-color: black; position: absolute; left: calc({{ model_output[1] }}% - 2px);"></div>
-                </div>
-                <p style="font-size: 20px;">The pairing probability falls within the {{ model_output[1] }}% percentile.</p>
-            </div>
-            {% endif %}
 
-
+ 
         </div>
-        <br>
+
+
     {% endif %}
-    <br>
-    <br>
+ 
 </div>
 {% endblock %}
