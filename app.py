@@ -56,60 +56,38 @@ def process_form():
         # Extract and validate form data
         tcra = data.get("tcra")
         if not tcra:
-            raise ValueError("Missing required field: tcra")
+            raise ValueError("Missing required field: CDR3 (TCR alpha chain)")
 
         va = data.get("va")
         if not va:
-            raise ValueError("Missing required field: va")
+            raise ValueError("Missing required field: V (TCR alpha chain)")
         tcr_model.validate_tr_prefix(va, "TRAV")
 
         ja = data.get("ja")
         if not ja:
-            raise ValueError("Missing required field: ja")
+            raise ValueError("Missing required field: J (TCR alpha chain)")
         tcr_model.validate_tr_prefix(ja, "TRAJ")
 
         tcrb = data.get("tcrb")
         if not tcrb:
-            raise ValueError("Missing required field: tcrb")
+            raise ValueError("Missing required field: CDR3 (TCR beta chain)")
 
         vb = data.get("vb")
         if not vb:
-            raise ValueError("Missing required field: vb")
+            raise ValueError("Missing required field: V (TCR beta chain)")
         tcr_model.validate_tr_prefix(vb, "TRBV")
 
         jb = data.get("jb")
         if not jb:
-            raise ValueError("Missing required field: jb")
+            raise ValueError("Missing required field: J (TCR beta chain)")
         tcr_model.validate_tr_prefix(jb, "TRBJ")
 
-        data_type = data.get("data_type")
-        if not data_type:
-            raise ValueError("Missing required field: Type of data")
-
         input_pair = [[tcra, va, ja], [tcrb, vb, jb]]
-        # Determine the model type based on the data type
-        if data_type == "All T cells":
-            model_of = "ireceptor"
-        else:
-            model_of = "vdjdb"
-            # Predict the base output using the iReceptor model
-            base_output = tcr_model.predict(input_pair, "ireceptor").item()
-            input_pair.append(base_output)
         # Predict the final output using the determined model
-        output = tcr_model.predict(input_pair, model_of).item()
+        output = tcr_model.predict(input_pair).item()
         output = round(output, 3)
         model_output = []
         model_output.append(output)
-        if data_type == "All T cells":
-            df = pd.read_csv("probs_and_labels_test_set.csv")
-
-            # Function to compute the percentile of a new probability X
-            def get_percentile(X, df):
-                percentile = stats.percentileofscore(df["prob"], X, kind='rank')
-                return percentile
-            percentile = get_percentile(output, df)
-            percentile = round(percentile, 3)
-            model_output.append(percentile)
 
         return render_template("index.html", active="Home", model_output=model_output)
     except Exception as e:
