@@ -23,7 +23,7 @@ font = FontProperties()
 font.set_family('serif')
 font_size = 16
 font.set_size(font_size)
-
+SEED = 42
 
 def read_dictionaries_from_file(file_path):
     """
@@ -60,14 +60,14 @@ def process_data_with_k_fold(file_path, batch_size, k=5):
 
         test_dataset = Loader_tcr.ChainClassificationDataset(pairs, vj_data)
         test_data_loader = DataLoader(test_dataset, batch_size=batch_size,
-                                      shuffle=True, drop_last=True, collate_fn=Loader_tcr.collate_fn)
+                                      shuffle=False, drop_last=True, collate_fn=Loader_tcr.collate_fn)
 
         fold_data = [(train_dataset, train_data_loader, pairs,
                       test_dataset, test_data_loader, pairs, len_one_hot)]
         return fold_data
 
     # Initialize the KFold class
-    kf = KFold(n_splits=k, shuffle=True)
+    kf = KFold(n_splits=k, shuffle=True, random_state=SEED)
     # Lists to store the datasets and data loaders for each fold
     fold_data = []
 
@@ -83,7 +83,7 @@ def process_data_with_k_fold(file_path, batch_size, k=5):
         # Create the dataset and DataLoader for the testing set
         test_dataset = Loader_tcr.ChainClassificationDataset(test_data, vj_data)
         test_data_loader = DataLoader(test_dataset, batch_size=batch_size,
-                                      shuffle=True, drop_last=True, collate_fn=Loader_tcr.collate_fn)
+                                      shuffle=False, drop_last=True, collate_fn=Loader_tcr.collate_fn)
 
         # Store the datasets and data loaders for this fold
         fold_data.append(
@@ -93,7 +93,7 @@ def process_data_with_k_fold(file_path, batch_size, k=5):
 
 
 def train_models(vocab_size, hyperparameters, batch_size, acid_2_ix, train_data_loader,
-                 len_one_hot, test_data_loader=None):
+                 len_one_hot, model_type, test_data_loader=None, ix_2_acid=None):
     """
     Train models with the given hyperparameters and data loaders.
     Args:
@@ -103,27 +103,52 @@ def train_models(vocab_size, hyperparameters, batch_size, acid_2_ix, train_data_
         acid_2_ix (dict): Dictionary mapping amino acids to indices.
         train_data_loader (DataLoader): DataLoader for training data.
         len_one_hot (int): Length of the one-hot encoded vectors.
+        model_type (str): Type of model to train.
         test_data_loader (DataLoader, optional): DataLoader for test data. Default is None.
+        ix_2_acid (dict): Dictionary mapping indices to amino acid.
     Returns:
         tuple: Trained model and encoders/decoders for alpha and beta chains.
     """
     (embed_size, hidden_size, num_layers, latent_size, weight_decay_encoder, dropout_prob, layer_norm,
-     nhead, dim_feedforward, weight_decay_cl, dropout_prob_cl, norm_cl, losses_weight) = hyperparameters
+     nhead, dim_feedforward, weight_decay_cl, dropout_prob_cl, norm_cl, losses_weight, lr_encoder, lr_cl) = hyperparameters
     # Initialize the models
+    if model_type == "BERT":
+        model = Models_tcr.FFNN(768 * 2 + len_one_hot, dropout_prob_cl, norm_cl)
+        model.to(DEVICE)
+        Trainer_tcr.train_model_bert(tokenizer, tcrbert, model, train_data_loader, test_data_loader, ix_2_acid, DEVICE, base_folder, weight_decay_cl, lr_cl)
+        return model, (None, None), (None, None)
+    model = Models_tcr.FFNN(latent_size * 2 + len_one_hot, dropout_prob_cl, norm_cl)
+    model.to(DEVICE)
+    if model_type == "ALSTM":
+        ALSTM = True
+        BiLSTM = False
+    elif model_type == "BiLSTM":
+        ALSTM = False
+        BiLSTM = True
+    elif model_type == "ABiLSTM":
+        ALSTM = True
+        BiLSTM = True
+    else:
+        ALSTM = False
+        BiLSTM = False
     alpha_encoder = Models_tcr.EncoderLstm(vocab_size, embed_size, hidden_size, latent_size, dropout_prob, layer_norm,
-                                       num_layers).to(DEVICE)
+                                       num_layers, BiLSTM)
     beta_encoder = Models_tcr.EncoderLstm(vocab_size, embed_size, hidden_size, latent_size, dropout_prob, layer_norm,
-                                      num_layers).to(DEVICE)
+                                      num_layers, BiLSTM)
     alpha_decoder = Models_tcr.DecoderLstm(vocab_size, embed_size, hidden_size, latent_size, dropout_prob, layer_norm,
-                                       num_layers).to(DEVICE)
+                                       num_layers, ALSTM, BiLSTM)
     beta_decoder = Models_tcr.DecoderLstm(vocab_size, embed_size, hidden_size, latent_size, dropout_prob, layer_norm,
-                                      num_layers).to(DEVICE)
+                                      num_layers, ALSTM, BiLSTM)
 
-    model = Models_tcr.FFNN(latent_size * 2 * 2 + len_one_hot, dropout_prob_cl, norm_cl).to(DEVICE)
+    alpha_encoder.to(DEVICE)
+    beta_encoder.to(DEVICE)
+    alpha_decoder.to(DEVICE)
+    beta_decoder.to(DEVICE)
 
-    Trainer_tcr.train_model(model, "LSTM", (alpha_encoder, alpha_decoder),
+    Trainer_tcr.train_model(model, (alpha_encoder, alpha_decoder),
                         (beta_encoder, beta_decoder), train_data_loader, test_data_loader, DEVICE,
-                        base_folder, batch_size, acid_2_ix, weight_decay_encoder, weight_decay_cl, losses_weight)
+                        base_folder, batch_size, acid_2_ix, weight_decay_encoder, weight_decay_cl, losses_weight,
+                        lr_encoder, lr_cl)
     return model, (alpha_encoder, alpha_decoder), (beta_encoder, beta_decoder)
 
 
@@ -149,6 +174,10 @@ def evaluate_model(model, encoders, data_loader):
     all_predicted_probs = []
     all_alpha = []
     all_beta = []
+    all_va = []
+    all_vb = []
+    all_ja = []
+    all_jb = []
     with torch.no_grad():
         for alpha, beta, va_one_hot, vb_one_hot, ja_one_hot, jb_one_hot, labels, stage1 in data_loader:
             labels = labels.to(DEVICE)
@@ -195,6 +224,10 @@ def evaluate_model(model, encoders, data_loader):
             # Append the true labels and predicted probabilities to the lists
             all_alpha.extend(alpha.cpu().numpy() if alpha.is_cuda else alpha.numpy())
             all_beta.extend(beta.cpu().numpy() if beta.is_cuda else beta.numpy())
+            all_va.extend(va_one_hot.cpu().numpy() if va_one_hot.is_cuda else va_one_hot.numpy())
+            all_vb.extend(vb_one_hot.cpu().numpy() if vb_one_hot.is_cuda else vb_one_hot.numpy())
+            all_ja.extend(ja_one_hot.cpu().numpy() if ja_one_hot.is_cuda else ja_one_hot.numpy())
+            all_jb.extend(jb_one_hot.cpu().numpy() if jb_one_hot.is_cuda else jb_one_hot.numpy())
             all_labels.extend(labels)
             all_predicted_probs.extend(predicted_probabilities.squeeze())
     # Calculate AUC
@@ -217,9 +250,76 @@ def evaluate_model(model, encoders, data_loader):
     top_beta_positives = [all_beta[i] for i in top_positive_indices]
     bottom_alpha_negatives = [all_alpha[i] for i in bottom_negative_indices]
     bottom_beta_negatives = [all_beta[i] for i in bottom_negative_indices]
-
+    top_va_positives = [all_va[i] for i in bottom_negative_indices]
+    top_vb_positives = [all_vb[i] for i in bottom_negative_indices]
+    top_ja_positives = [all_ja[i] for i in bottom_negative_indices]
+    top_jb_positives = [all_jb[i] for i in bottom_negative_indices]
     return (auc, all_labels, all_predicted_probs, all_alpha, all_beta, top_alpha_positives, top_beta_positives,
             bottom_alpha_negatives, bottom_beta_negatives)
+
+def evaluate_model_bert(model, data_loader, tokenizer, tcrbert, ix_2_acid):
+        """
+        Evaluate the model on the given data loader.
+        Args:
+            model (nn.Module): The model to evaluate.
+            data_loader (DataLoader): DataLoader for the evaluation data.
+            tokenizer: A pretrained HuggingFace tokenizer (AutoTokenizer) used to
+            convert CDR3 sequences into token IDs suitable for the TCR-BERT model.
+            tcrbert: A pretrained HuggingFace model (AutoModel) loaded from the
+            specified checkpoint, used to generate contextual embeddings for the
+            input CDR3 sequences.
+            ix_2_acid (dict): Dictionary mapping indices to amino acid.
+        Returns:
+            tuple: AUC score, all labels, all predicted probabilities, alpha sequences, beta sequences,
+                   top positive alpha sequences, top positive beta sequences, bottom negative alpha sequences,
+                   bottom negative beta sequences.
+        """
+        correct = 0
+        total = 0
+        model.eval()
+        all_labels = []
+        all_predicted_probs = []
+        with torch.no_grad():
+            for alpha, beta, va_one_hot, vb_one_hot, ja_one_hot, jb_one_hot, labels, stage1 in data_loader:
+                labels = labels.to(DEVICE)
+                va_one_hot = va_one_hot.to(DEVICE)
+                vb_one_hot = vb_one_hot.to(DEVICE)
+                ja_one_hot = ja_one_hot.to(DEVICE)
+                jb_one_hot = jb_one_hot.to(DEVICE)
+                decoded_alpha = []
+                for seq_tensor in alpha:
+                    seq = seq_tensor.tolist()
+                    decoded = "".join(ix_2_acid[i] for i in seq if ix_2_acid[i] not in ["<EOS>", "<PAD>"])
+                    decoded_alpha.append(decoded)
+                decoded_beta = []
+                for seq_tensor in beta:
+                    seq = seq_tensor.tolist()
+                    decoded = "".join(ix_2_acid[i] for i in seq if ix_2_acid[i] not in ["<EOS>", "<PAD>"])
+                    decoded_beta.append(decoded)
+                concatenated_inputs = Trainer_tcr.pass_models_bert(tokenizer, tcrbert, decoded_alpha, decoded_beta,
+                                                               va_one_hot, vb_one_hot, ja_one_hot, jb_one_hot, DEVICE,
+                                                               stage1)
+                # Get model outputs and predictions
+                outputs = model(concatenated_inputs)
+                predicted_probabilities = torch.sigmoid(outputs)
+                predicted = (predicted_probabilities >= 0.5).squeeze().int()
+                add = (predicted == labels).sum().item()
+                total += len(predicted)
+                correct += add
+                # Convert labels and predictions to numpy arrays
+                labels = labels.cpu().numpy() if labels.is_cuda else labels.numpy()
+                if predicted_probabilities.is_cuda:
+                    predicted_probabilities = predicted_probabilities.cpu().numpy()
+                else:
+                    predicted_probabilities = predicted_probabilities.numpy()
+                # Append the true labels and predicted probabilities to the lists
+                all_labels.extend(labels)
+                all_predicted_probs.extend(predicted_probabilities.squeeze())
+        # Calculate AUC
+        auc = roc_auc_score(all_labels, all_predicted_probs)
+        print(f'AUC: {auc}')
+
+        return auc, all_labels, all_predicted_probs
 
 
 def plot_auc(all_labels, all_predicted_probs, all_labels2=None, all_predicted_probs2=None, ax=None, text=None,
@@ -351,19 +451,21 @@ def objective(trial, file_path):
         float: Mean AUC score across K-folds.
     """
     # Define the search space for hyperparameters
-    hidden_size = trial.suggest_categorical('hidden_size', [256, 512, 1024])
+    hidden_size = trial.suggest_categorical('hidden_size', [128, 256, 512])
     weight_decay_cl = trial.suggest_float('weight_decay_cl', 1e-5, 1e-1, log=True)
     weight_decay_encoder = trial.suggest_float('weight_decay_encoder', 1e-5, 1e-1, log=True)
-    latent_size = trial.suggest_categorical('latent_size', [256, 512, 1024])
+    latent_size = trial.suggest_categorical('latent_size', [128, 256, 512])
     num_layers = trial.suggest_categorical('num_layers', [1, 2])
-    dropout_prob = trial.suggest_float('dropout_prob', 0.0, 0.5)
-    layer_norm = trial.suggest_categorical('layer_norm_en', [True, False])
-    dropout_prob_cl = trial.suggest_float('dropout_prob_cl', 0.1, 0.7)
+    dropout_prob_en = trial.suggest_float('dropout_prob_en', 0.0, 0.5)
+    layer_norm = trial.suggest_categorical('layer_norm', [True, False])
+    dropout_prob_cl = trial.suggest_float('dropout_prob_cl', 0.0, 0.6)
     norm_cl = trial.suggest_categorical('norm_cl', [True, False])
-    losses_weight = trial.suggest_int('losses_weight', 20, 100)
+    losses_weight = trial.suggest_int('losses_weight', 10, 80)
+    embed_size = trial.suggest_categorical('embed_size', [64, 128, 256])
+    lr_encoder = trial.suggest_float("lr_encoder", 1e-5, 1e-3, log=True)
+    lr_cl = trial.suggest_float("lr_cl", 1e-4, 1e-2, log=True)
 
     encoder_type = "LSTM"
-    embed_size = trial.suggest_categorical('embed_size', [128, 256, 512])
     if encoder_type == "LSTM" or encoder_type == "BiLSTM":
         nhead = None
         dim_feedforward = None
@@ -374,11 +476,11 @@ def objective(trial, file_path):
         if embed_size % nhead != 0:
             raise ValueError("embed_size must be divisible by nhead")
 
-    hyperparameter = (embed_size, hidden_size, num_layers, latent_size, weight_decay_encoder, dropout_prob, layer_norm,
-                      nhead, dim_feedforward, weight_decay_cl, dropout_prob_cl, norm_cl, losses_weight)
+    hyperparameter = (embed_size, hidden_size, num_layers, latent_size, weight_decay_encoder, dropout_prob_en, layer_norm,
+                      nhead, dim_feedforward, weight_decay_cl, dropout_prob_cl, norm_cl, losses_weight, lr_encoder, lr_cl)
 
     batch_size = 64
-
+    model_type = "LSTM"
     # K-fold cross-validation loop
     k = 2
     fold_data = process_data_with_k_fold(file_path, batch_size, k)
@@ -392,7 +494,7 @@ def objective(trial, file_path):
         # Train models with current hyperparameters
         model, (alpha_encoder, alpha_decoder), (beta_encoder, beta_decoder) = train_models(
             vocab_size, hyperparameter, batch_size, train_dataset.acid_2_ix, train_data_loader,
-            len_one_hot, "irec"
+            len_one_hot, model_type, test_data_loader
         )
         # Evaluate model and calculate AUC
         auc_test, _, _, _, _, _, _, _, _ = evaluate_model(
@@ -437,7 +539,7 @@ def save_best_params(study, trial, file_path='best_hyperparameters_vdjdb.json'):
         print(f"Updated best hyperparameters saved to {file_path}")
 
 
-def run_optuna(input_file, hyperparameters_file_path, initial_hyperparameters):
+def run_optuna(input_file, hyperparameters_file_path, initial_hyperparameters=None):
     """
     Run Optuna hyperparameter optimization.
     Args:
@@ -445,32 +547,36 @@ def run_optuna(input_file, hyperparameters_file_path, initial_hyperparameters):
         hyperparameters_file_path (str): Path to the file where best hyperparameters will be saved.
         initial_hyperparameters: start search from
     """
-    study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=42))
+    study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=SEED))
+
 
     # Try to load initial seed hyperparameters from file
-    try:
-        with open(initial_hyperparameters, 'r') as f:
-            loaded = json.load(f)
+    if initial_hyperparameters is not None:
+        try:
+            with open(initial_hyperparameters, 'r') as f:
+                loaded = json.load(f)
 
-        # Map keys from file to Optuna trial parameter names
-        initial_params = {
-            "hidden_size": loaded["hidden_size"],
-            "weight_decay_cl": loaded["weight_decay_cl"],
-            "weight_decay_encoder": loaded["weight_decay_encoder"],
-            "latent_size": loaded["latent_size"],
-            "num_layers": loaded["num_layers"],
-            "dropout_prob_en": loaded["dropout_prob"],
-            "layer_norm_en": loaded["layer_norm"],
-            "dropout_prob_cl": loaded["dropout_prob"],
-            "batch_norm_cl": loaded["layer_norm"],
-            "losses_weight": 50,
-            "embed_size": loaded["embed_size"]
-        }
-        # Enqueue the initial trial
-        study.enqueue_trial(initial_params)
-        print("Initial trial enqueued with parameters:", initial_params)
-    except Exception as e:
-        print("No valid initial hyperparameters found:", e)
+            # Map keys from file to Optuna trial parameter names
+            initial_params = {
+                "hidden_size": loaded["hidden_size"],
+                "weight_decay_cl": loaded["weight_decay_cl"],
+                "weight_decay_encoder": loaded["weight_decay_encoder"],
+                "latent_size": loaded["latent_size"],
+                "num_layers": loaded["num_layers"],
+                "dropout_prob_en": loaded["dropout_prob_en"],
+                "layer_norm_en": loaded["layer_norm"],
+                "dropout_prob_cl": loaded["dropout_prob_cl"],
+                "batch_norm_cl": loaded["norm_cl"],
+                "losses_weight": loaded["losses_weight"],
+                "embed_size": loaded["embed_size"],
+                "lr_encoder": loaded["lr_encoder"],
+                "lr_cl": loaded["lr_cl"]
+            }
+            #     # Enqueue the initial trial
+            study.enqueue_trial(initial_params)
+            print("Initial trial enqueued with parameters:", initial_params)
+        except Exception as e:
+            print("No valid initial hyperparameters found:", e)
 
     def wrapped_objective(trial):
         return objective(trial, input_file)
@@ -491,15 +597,17 @@ def run_optuna(input_file, hyperparameters_file_path, initial_hyperparameters):
     print("Best hyperparameters saved")
 
 
-def find_best_model(file_path, best_params_file):
+def find_best_model(file_path, best_params_file, model_type):
     """
     Find the best model using the best hyperparameters.
     Args:
         file_path (str): Path to the data file.
         best_params_file (str): Path to the file containing the best hyperparameters.
+        model_type (str): Type of model to train.
     Returns:
         tuple: Best model, alpha encoder, beta encoder, and test data loader.
     """
+    print("Using folder:", base_folder)
     # Load the best hyperparameters from the JSON file
     with open(best_params_file, 'r') as f:
         best_params = json.load(f)
@@ -509,21 +617,23 @@ def find_best_model(file_path, best_params_file):
     hidden_size = best_params.get('hidden_size', None)
     num_layers = best_params.get('num_layers', None)
     latent_size = best_params.get('latent_size', None)
-    weight_decay_cl = best_params['weight_decay_cl']
+    weight_decay_cl = best_params.get('weight_decay_cl', None)
     weight_decay_encoder = best_params.get('weight_decay_encoder', None)
-    dropout_prob = best_params['dropout_prob']
-    dropout_prob_cl = dropout_prob
+    dropout_prob_en = best_params['dropout_prob_en']
+    dropout_prob_cl = best_params['dropout_prob_cl']
     layer_norm = best_params['layer_norm']
     norm_cl = best_params['norm_cl']
-    losses_weight = 50
+    losses_weight = best_params['losses_weight']
+    lr_encoder = best_params['lr_encoder']
+    lr_cl = best_params['lr_cl']
 
     # Extract parameters specific to non-LSTM models if available
     nhead = best_params.get('nhead', None)
     dim_feedforward = best_params.get('dim_feedforward', None)
 
     # Prepare the hyperparameter tuple
-    hyperparameter = (embed_size, hidden_size, num_layers, latent_size, weight_decay_encoder, dropout_prob, layer_norm,
-                      nhead, dim_feedforward, weight_decay_cl, dropout_prob_cl, norm_cl, losses_weight)
+    hyperparameter = (embed_size, hidden_size, num_layers, latent_size, weight_decay_encoder, dropout_prob_en, layer_norm,
+                      nhead, dim_feedforward, weight_decay_cl, dropout_prob_cl, norm_cl, losses_weight, lr_encoder, lr_cl)
 
     # Other fixed hyperparameters
     batch_size = 64
@@ -549,21 +659,33 @@ def find_best_model(file_path, best_params_file):
         print(f"Training on fold {fold + 1}/{k}")
         (train_dataset, train_data_loader, train_data, test_dataset, test_data_loader, test_data,
          len_one_hot) = fold_data[fold]
-
+        if model_type == "BERT":
+            ix_2_acid = train_dataset.ix_2_acid
+        else:
+            ix_2_acid = None
         # Train models with current hyperparameters
         model, (alpha_encoder, alpha_decoder), (beta_encoder, beta_decoder) = train_models(
             vocab_size, hyperparameter, batch_size, train_dataset.acid_2_ix, train_data_loader,
-            len_one_hot, test_data_loader
+            len_one_hot, model_type, test_data_loader, ix_2_acid
         )
 
         # Evaluate model and calculate AUC
-        auc_train, all_labels_train, all_predicted_probs_train, _, _, _, _, _, _ = evaluate_model(
-            model, (alpha_encoder, beta_encoder), train_data_loader
-        )
-        plot_auc(all_labels_train, all_predicted_probs_train)
-        auc_test, all_labels_test, all_predicted_probs_test, _, _, _, _, _, _ = evaluate_model(
-            model, (alpha_encoder, beta_encoder), test_data_loader
-        )
+        if model_type == "BERT":
+            auc_train, all_labels_train, all_predicted_probs_train = evaluate_model_bert(
+                model, train_data_loader, tokenizer, tcrbert, ix_2_acid
+            )
+            plot_auc(all_labels_train, all_predicted_probs_train)
+            auc_test, all_labels_test, all_predicted_probs_test = evaluate_model_bert(
+                model, test_data_loader, tokenizer, tcrbert, ix_2_acid
+            )
+        else:
+            auc_train, all_labels_train, all_predicted_probs_train, _, _, _, _, _, _ = evaluate_model(
+                model, (alpha_encoder, beta_encoder), train_data_loader
+            )
+            plot_auc(all_labels_train, all_predicted_probs_train)
+            auc_test, all_labels_test, all_predicted_probs_test, _, _, _, _, _, _ = evaluate_model(
+                model, (alpha_encoder, beta_encoder), test_data_loader
+            )
         fold_aucs_test.append(auc_test)
         fold_aucs_train.append(auc_train)
 
@@ -571,23 +693,33 @@ def find_best_model(file_path, best_params_file):
         if auc_test > best_auc:
             best_auc = auc_test
             best_model_state_dict = model.state_dict()
-            best_alpha_encoder = alpha_encoder.state_dict()
-            best_beta_encoder = beta_encoder.state_dict()
+            if model_type != "BERT":
+                best_alpha_encoder = alpha_encoder.state_dict()
+                best_beta_encoder = beta_encoder.state_dict()
             print(f'New best AUC: {best_auc} found on fold {fold + 1}')
 
     # Save only the best model after all folds have been processed
     if best_model_state_dict is not None:
         torch.save(best_model_state_dict, best_model_path)
-        torch.save(best_alpha_encoder, best_alpha_encoder_path)
-        torch.save(best_beta_encoder, best_beta_encoder_path)
+        if model_type != "BERT":
+            torch.save(best_alpha_encoder, best_alpha_encoder_path)
+            torch.save(best_beta_encoder, best_beta_encoder_path)
+            print(f'Best alpha encoder saved to {best_alpha_encoder_path}')
+            print(f'Best beta encoder saved to {best_beta_encoder_path}')
         print(f'Best model saved to {best_model_path} with AUC: {best_auc}')
-        print(f'Best alpha encoder saved to {best_alpha_encoder_path}')
-        print(f'Best beta encoder saved to {best_beta_encoder_path}')
+    auc_file_path = os.path.join(base_folder, "auc_values.txt")
+    with open(auc_file_path, "w") as f:
+        f.write("Fold\tTrain_AUC\tVal_AUC\n")
+        for i, (train_auc, val_auc) in enumerate(zip(fold_aucs_train, fold_aucs_test)):
+            f.write(f"{i + 1}\t{train_auc:.6f}\t{val_auc:.6f}\n")
+
+    print(f"AUC values saved to {auc_file_path}")
+
     # Return the mean AUC across the folds
     return model, alpha_encoder, beta_encoder, test_data_loader
 
 
-def load_models(model_save_paths, len_one_hot, vocab_size, best_params_file):
+def load_models(model_save_paths, len_one_hot, vocab_size, best_params_file, model_type):
     """
     Load the best models and their parameters.
     Args:
@@ -595,6 +727,7 @@ def load_models(model_save_paths, len_one_hot, vocab_size, best_params_file):
         len_one_hot (int): Length of the one-hot encoded vectors.
         vocab_size (int): Size of the vocabulary.
         best_params_file (str): Path to the file containing the best hyperparameters.
+        model_type (str): Type of model to train.
     Returns:
         tuple: Loaded main model, alpha encoder, and beta encoder.
     """
@@ -607,25 +740,51 @@ def load_models(model_save_paths, len_one_hot, vocab_size, best_params_file):
     hidden_size = best_params['hidden_size']
     num_layers = best_params['num_layers']
     latent_size = best_params['latent_size']
-    dropout_prob = best_params['dropout_prob']
+    dropout_prob_en = best_params['dropout_prob_en']
     layer_norm = best_params['layer_norm']
     norm_cl = best_params['norm_cl']
+    weight_decay_cl = best_params['weight_decay_cl']
+    weight_decay_encoder = best_params['weight_decay_encoder']
+    dropout_prob_cl = best_params['dropout_prob_cl']
+    losses_weight = best_params['losses_weight']
+    lr_encoder = best_params['lr_encoder']
+    lr_cl = best_params['lr_cl']
+
+    if model_type == "BERT":
+        main_model = Models_tcr.FFNN(768 * 2 + len_one_hot, dropout_prob_cl, norm_cl).to(DEVICE)
+        main_model.load_state_dict(torch.load(model_save_paths['model'], map_location=DEVICE, weights_only=False))
+        main_model.eval()  # Set the model to evaluation mode
+        return main_model
+
     # Load the main model
-    main_model = Models_tcr.FFNN(latent_size * 2 * 2 + len_one_hot, dropout_prob, norm_cl).to(DEVICE)
+    main_model = Models_tcr.FFNN(latent_size * 2 + len_one_hot, dropout_prob_cl, norm_cl).to(DEVICE)
 
     main_model.load_state_dict(torch.load(model_save_paths['model'], map_location=DEVICE, weights_only=False))
     main_model.eval()  # Set the model to evaluation mode
 
+    if model_type == "ALSTM":
+        ALSTM = True
+        BiLSTM = False
+    elif model_type == "BiLSTM":
+        ALSTM = False
+        BiLSTM = True
+    elif model_type == "ABiLSTM":
+        ALSTM = True
+        BiLSTM = True
+    else:
+        ALSTM = False
+        BiLSTM = False
+
     # Load the alpha encoder
-    alpha_encoder = Models_tcr.EncoderLstm(vocab_size, embed_size, hidden_size, latent_size, dropout_prob, layer_norm,
-                                       num_layers).to(DEVICE)
+    alpha_encoder = Models_tcr.EncoderLstm(vocab_size, embed_size, hidden_size, latent_size, dropout_prob_en, layer_norm,
+                                       num_layers, BiLSTM).to(DEVICE)
     alpha_encoder.load_state_dict(torch.load(model_save_paths['alpha_encoder'], map_location=DEVICE,
                                              weights_only=False))
     alpha_encoder.eval()
 
     # Load the beta encoder
-    beta_encoder = Models_tcr.EncoderLstm(vocab_size, embed_size, hidden_size, latent_size, dropout_prob, layer_norm,
-                                      num_layers).to(DEVICE)
+    beta_encoder = Models_tcr.EncoderLstm(vocab_size, embed_size, hidden_size, latent_size, dropout_prob_en, layer_norm,
+                                      num_layers, BiLSTM).to(DEVICE)
     beta_encoder.load_state_dict(torch.load(model_save_paths['beta_encoder'], map_location=DEVICE,
                                             weights_only=False))
     beta_encoder.eval()
@@ -648,16 +807,17 @@ def load_data(file_path):
     batch_size = 64
     full_dataset = Loader_tcr.ChainClassificationDataset(pairs, vj_data)
     full_data_loader = DataLoader(full_dataset, batch_size=batch_size,
-                                  shuffle=True, drop_last=True, collate_fn=Loader_tcr.collate_fn)
+                                  shuffle=False, drop_last=False, collate_fn=Loader_tcr.collate_fn)
     return full_dataset, full_data_loader, pairs, len_one_hot
 
 
-def load_and_evaluate_model(file_path, param_file, type_model="pMHC", model_save_paths=None):
+def load_and_evaluate_model(file_path, param_file, model_type, type_model="pMHC", model_save_paths=None):
     """
     Load and evaluate the model on the given dataset.
     Args:
         file_path (str): Path to the data file.
         param_file (str): Path to the file containing the best hyperparameters.
+        model_type (str): Type of model to train.
         type_model (str, optional): Type of the model. Default is 'pMHC'.
         model_save_paths (str, optional): Path to saved models.
     Returns:
@@ -666,26 +826,43 @@ def load_and_evaluate_model(file_path, param_file, type_model="pMHC", model_save
     if model_save_paths is None:
         if type_model == "pMHC":
             model_save_paths = {
-                'model': "combined_5fold/best_model.pth",
-                'alpha_encoder': "combined_5fold/best_alpha_encoder.pth",
-                'beta_encoder': "combined_5fold/best_beta_encoder.pth"
+                'model': "models/combined_5fold/best_model.pth",
+                'alpha_encoder': "models/combined_5fold/best_alpha_encoder.pth",
+                'beta_encoder': "models/combined_5fold/best_beta_encoder.pth"
             }
         else:
             model_save_paths = {
-                'model': "non_paired/best_model.pth",
-                'alpha_encoder': "non_paired/best_alpha_encoder.pth",
-                'beta_encoder': "non_paired/best_beta_encoder.pth"
+                'model': "models/non_paired/best_model.pth",
+                'alpha_encoder': "models/non_paired/best_alpha_encoder.pth",
+                'beta_encoder': "models/non_paired/best_beta_encoder.pth"
             }
     # Load your dataset
     full_dataset, full_data_loader, full_data, len_one_hot = load_data(file_path)
     vocab_size = len(full_dataset.vocab)
     # Load the best models
-    model, alpha_encoder, beta_encoder = load_models(model_save_paths, len_one_hot, vocab_size, param_file)
-    # Evaluate the model on the test set
-    (auc_test, all_labels_test, all_predicted_probs_test, all_alpha_te, all_beta_te, top_alpha_positives_te,
-     top_beta_positives_te, bottom_alpha_negatives_te, bottom_beta_negatives_te) = evaluate_model(
-        model, (alpha_encoder, beta_encoder), full_data_loader
-    )
+    print(model_save_paths, file_path)
+    if model_type == "BERT":
+        model = load_models(model_save_paths, len_one_hot, vocab_size, param_file, model_type)
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_safetensors=True)
+        tcrbert = AutoModel.from_pretrained(
+            MODEL_NAME,
+            torch_dtype="auto",
+            trust_remote_code=True,
+            use_safetensors=True
+        )
+
+        tcrbert = tcrbert.to(DEVICE)
+        (auc_test, all_labels_test, all_predicted_probs_test) = evaluate_model_bert(
+            model, full_data_loader, tokenizer, tcrbert, full_dataset.ix_2_acid
+        )
+    else:
+        model, alpha_encoder, beta_encoder = load_models(model_save_paths, len_one_hot, vocab_size, param_file,
+                                                         model_type)
+        # Evaluate the model on the test set
+        (auc_test, all_labels_test, all_predicted_probs_test, all_alpha_te, all_beta_te, top_alpha_positives_te,
+         top_beta_positives_te, bottom_alpha_negatives_te, bottom_beta_negatives_te) = evaluate_model(
+            model, (alpha_encoder, beta_encoder), full_data_loader
+        )
     print(f'Test AUC: {auc_test}')
     return all_labels_test, all_predicted_probs_test
 
@@ -707,24 +884,27 @@ def run_on_all_save_models(param_file, dataset_file, paths_for_best_models):
     hidden_size = best_params.get('hidden_size', None)
     num_layers = best_params.get('num_layers', None)
     latent_size = best_params.get('latent_size', None)
-    weight_decay_cl = best_params['weight_decay_cl']
+    weight_decay_cl = best_params.get('weight_decay_cl', None)
     weight_decay_encoder = best_params.get('weight_decay_encoder', None)
-    dropout_prob = best_params['dropout_prob']
+    dropout_prob_en = best_params['dropout_prob_en']
+    dropout_prob_cl = best_params['dropout_prob_cl']
     layer_norm = best_params['layer_norm']
     norm_cl = best_params['norm_cl']
-    losses_weight = 50
+    losses_weight = best_params['losses_weight']
+    lr_encoder = best_params['lr_encoder']
+    lr_cl = best_params['lr_cl']
 
     # Extract parameters specific to non-LSTM models if available
     nhead = best_params.get('nhead', None)
     dim_feedforward = best_params.get('dim_feedforward', None)
 
     # Prepare the hyperparameter tuple
-    hyperparameter = (embed_size, hidden_size, num_layers, latent_size, weight_decay_encoder, dropout_prob, layer_norm,
-                      nhead, dim_feedforward, weight_decay_cl, dropout_prob, norm_cl, losses_weight)
+    hyperparameter = (embed_size, hidden_size, num_layers, latent_size, weight_decay_encoder, dropout_prob_en, layer_norm,
+                      nhead, dim_feedforward, weight_decay_cl, dropout_prob_cl, norm_cl, losses_weight, lr_encoder, lr_cl)
 
     batch_size = 64
     pairs = Loader_tcr.read_data(dataset_file)
-    va_counts, vb_counts, ja_counts, jb_counts = read_dictionaries_from_file('tcrbarn/filtered_counters.json')
+    va_counts, vb_counts, ja_counts, jb_counts = read_dictionaries_from_file('filtered_counters.json')
     vj_data = (va_counts, vb_counts, ja_counts, jb_counts)
     # Calculate the total length of all dictionaries combined
     len_one_hot = len(va_counts) + len(vb_counts) + len(ja_counts) + len(jb_counts)
@@ -743,7 +923,7 @@ def run_on_all_save_models(param_file, dataset_file, paths_for_best_models):
     # Train models with current hyperparameters
     model, (alpha_encoder, alpha_decoder), (beta_encoder, beta_decoder) = train_models(
         vocab_size, hyperparameter, batch_size, train_dataset.acid_2_ix, train_data_loader,
-        len_one_hot, "irec"
+        len_one_hot, "LSTM", ix_2_acid=train_dataset.ix_2_acid
     )
 
     best_model_state_dict = model.state_dict()
@@ -808,7 +988,7 @@ def predict(input_pair, model_of="pMHC"):
     loader = DataLoader(dataset, batch_size=1, collate_fn=Loader_tcr.collate_fn)
     vocab_size = len(dataset.vocab)
     # Load the models
-    model, alpha_encoder, beta_encoder = load_models(model_save_paths, len_one_hot, vocab_size, best_param)
+    model, alpha_encoder, beta_encoder = load_models(model_save_paths, len_one_hot, vocab_size, best_param, "LSTM")
     alpha_encoder.eval()
     beta_encoder.eval()
     model.eval()
@@ -869,8 +1049,8 @@ def parse_arguments():
     parser.add_argument('--tcrb', type=str, required=True, help="Tcr beta sequence")
     parser.add_argument('--vb', type=lambda v: validate_tr_prefix(v, "TRBV"), required=True, help="V beta")
     parser.add_argument('--jb', type=lambda v: validate_tr_prefix(v, "TRBJ"), required=True, help="J beta")
-    parser.add_argument('--data_type', type=str, required=True, choices=['All T cells', 'pMHC'],
-                        help="All T cells or pMHC")
+    parser.add_argument('--data_type', type=str, choices=['All T cells', 'pMHC'],
+                        help="Optional: 'All T cells' or 'pMHC'")
 
     return parser.parse_args()
 
@@ -886,17 +1066,43 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
+def filter_dummy_dup(original_file, out_file):
+    df_original = pd.read_csv(original_file)
+    df_unique = df_original.drop_duplicates(subset=["tcra", "tcrb"])
+    df_unique.to_csv(out_file, index=False)
+
+
+def combine_and_shuffle_csv(file1, file2, output_file, seed=42):
+    """
+    Combine two CSV files with identical columns and shuffle the rows.
+    Args:
+        file1 (str): Path to first CSV file.
+        file2 (str): Path to second CSV file.
+        output_file (str): Path to save the combined shuffled CSV.
+        seed (int): Random seed for reproducible shuffling.
+    """
+    # Read both files
+    df1 = pd.read_csv(file1)
+    df2 = pd.read_csv(file2)
+    # Combine them
+    df = pd.concat([df1, df2], ignore_index=True)
+    # Shuffle rows
+    df = df.sample(frac=1, random_state=seed).reset_index(drop=True)
+    # Save result
+    df.to_csv(output_file, index=False)
+    print(f"Combined and shuffled file saved to: {output_file}")
+
+
 if __name__ == "__main__":
-    set_seed(42)
+    SEED = 42
+    set_seed(SEED)
     # Parse command-line arguments
     args = parse_arguments()
     # Prepare the input pair from the parsed arguments
     input_pair = [[args.tcra, args.va, args.ja], [args.tcrb, args.vb, args.jb]]
     # Determine the model type based on the data type
-    if args.data_type == "All T cells":
-        model_of = "All T cells"
+    if args.data_type:
+        output = predict(input_pair, args.data_type).item()
     else:
-        model_of = "pMHC"
-    # Predict the final output using the determined model
-    output = predict(input_pair, model_of).item()
+        output = predict(input_pair).item()
     print(f'The probability for given Alpha and Beta chains to pair is {output}.')

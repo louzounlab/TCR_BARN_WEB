@@ -5,6 +5,12 @@ import torch
 import tcrbarn.v_j_tcr as v_j_tcr
 
 
+def encode_gene(gene_value, gene_dict):
+    if pd.isna(gene_value) or gene_value in ["~", "", None]:
+        return gene_dict["<MIS>"]
+    return gene_dict.get(gene_value, gene_dict["<UNK>"])
+
+
 class ChainClassificationDataset(Dataset):
     """
     Dataset class for chain pairing classification.
@@ -72,13 +78,13 @@ class ChainClassificationDataset(Dataset):
         # One-hot encode V and J genes
         va, vb, ja, jb = vj
         va_one_hot = torch.zeros(self.num_va)
-        va_one_hot[self.va_2_ix.get(va, self.va_2_ix["<UNK>"])] = 1
+        va_one_hot[encode_gene(va, self.va_2_ix)] = 1
         vb_one_hot = torch.zeros(self.num_vb)
-        vb_one_hot[self.vb_2_ix.get(vb, self.vb_2_ix["<UNK>"])] = 1
+        vb_one_hot[encode_gene(vb, self.vb_2_ix)] = 1
         ja_one_hot = torch.zeros(self.num_ja)
-        ja_one_hot[self.ja_2_ix.get(ja, self.ja_2_ix["<UNK>"])] = 1
+        ja_one_hot[encode_gene(ja, self.ja_2_ix)] = 1
         jb_one_hot = torch.zeros(self.num_jb)
-        jb_one_hot[self.jb_2_ix.get(jb, self.jb_2_ix["<UNK>"])] = 1
+        jb_one_hot[encode_gene(jb, self.jb_2_ix)] = 1
 
         return alpha_tensor, beta_tensor, va_one_hot, vb_one_hot, ja_one_hot, jb_one_hot, label, output
 

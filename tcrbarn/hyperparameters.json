@@ -1,11 +1,15 @@
 {
-    "hidden_size": 1024,
-    "weight_decay_cl": 0.1,
-    "weight_decay_encoder": 0.1,
-    "latent_size": 256,
-    "num_layers": 1,
-    "dropout_prob": 0.174,
+    "hidden_size": 128,
+    "weight_decay_cl": 0.001628103796167465,
+    "weight_decay_encoder": 0.02519543438582165,
+    "latent_size": 128,
+    "num_layers": 2,
+    "dropout_prob_en": 0.2515970459585748,
     "layer_norm": false,
+    "dropout_prob_cl": 0.4521622105995897,
     "norm_cl": true,
-    "embed_size": 512
+    "losses_weight": 46,
+    "embed_size": 256,
+    "lr_encoder": 1.438311106545691e-05,
+    "lr_cl": 0.0003346600994600423
 }

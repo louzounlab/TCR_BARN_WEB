@@ -89,6 +89,17 @@ def process_form():
         model_output = []
         model_output.append(output)
 
+        df = pd.read_csv("test_with_probs.csv")
+
+        # Function to compute the percentile of a new probability X
+        def get_percentile(X, df):
+            percentile = stats.percentileofscore(df["probability"], X, kind='rank')
+            return percentile
+
+        percentile = get_percentile(output, df)
+        percentile = round(percentile, 1)
+        model_output.append(percentile)
+
         return render_template("index.html", active="Home", model_output=model_output)
     except Exception as e:
         return render_template("index.html", active="Home", model_output=[], error=str(e))

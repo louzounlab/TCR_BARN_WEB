@@ -95,11 +95,11 @@
         <br>
         <div class="row text-center">
             <div class="col">
-                <p style="font-size: 22px; font-weight: bold;">The score:</p>
+                <p style="font-size: 22px; font-weight: bold;">The probability:</p>
                 <div style="width: 300px; height: 40px; background: linear-gradient(to left, green, yellow, red); border: 2px solid black; position: relative; margin: auto;">
-                    <div style="width: 4px; height: 100%; background-color: black; position: absolute; left: calc({{ model_output[0] * 100 }}% - 2px);"></div>
+                    <div style="width: 4px; height: 100%; background-color: black; position: absolute; left: calc({{ model_output[1]}}% - 2px);"></div>
                 </div>
-                <p style="font-size: 20px;">The score of given Alpha and Beta chains is {{ model_output[0]}}%.</p>
+                <p style="font-size: 20px;">The predicted binding probability of the given Alpha and Beta chains is {{ model_output[1] }}%.</p>
             </div>
 
  

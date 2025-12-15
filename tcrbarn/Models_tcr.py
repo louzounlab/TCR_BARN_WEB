@@ -16,16 +16,18 @@ class EncoderLstm(nn.Module):
         num_layers (int, optional): Number of LSTM layers. Default is 1.
     """
     def __init__(self, vocab_size, embed_size, hidden_size, latent_size, dropout_prob=0, layer_norm=False,
-                 num_layers=1):
+                 num_layers=1, bidirectional=False):
         super().__init__()
         self.hidden_size = hidden_size
         self.latent_size = latent_size
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.lstm = nn.LSTM(embed_size, hidden_size, num_layers=num_layers, batch_first=True)
+        self.lstm = nn.LSTM(embed_size, hidden_size, num_layers=num_layers, batch_first=True, bidirectional=bidirectional)
         self.dropout = nn.Dropout(dropout_prob)
         self.layer_norm = nn.LayerNorm(hidden_size * 2) if layer_norm else nn.Identity()
-        self.fc_mean = nn.Linear(hidden_size * 2, latent_size * 2)
-        self.fc_logvar = nn.Linear(hidden_size * 2, latent_size * 2)
+        self.bidirectional = bidirectional
+        direction = 2 if self.bidirectional else 1
+        self.fc_mean = nn.Linear(hidden_size * 2 * direction, latent_size)
+        self.fc_logvar = nn.Linear(hidden_size * 2 * direction, latent_size)
 
     def forward(self, x):
         """
@@ -39,10 +41,16 @@ class EncoderLstm(nn.Module):
             mean (Tensor): Mean of the latent distribution of shape (batch_size, latent_size * 2).
             log_var (Tensor): Log variance of the latent distribution of shape (batch_size, latent_size * 2).
         """
-        x = torch.flip(x, [1])  # Reversing the sequence of indices
         embedded = self.embedding(x)
         outputs, (hidden, cell) = self.lstm(embedded)
         hidden, cell = hidden.contiguous(), cell.contiguous()
+        if self.bidirectional:
+            forward_last_hidden = hidden[-2]
+            backward_last_hidden = hidden[-1]
+            hidden = torch.cat((forward_last_hidden, backward_last_hidden), dim=1).unsqueeze(0)
+            forward_last_cell = cell[-2]
+            backward_last_cell = cell[-1]
+            cell = torch.cat((forward_last_cell, backward_last_cell), dim=1).unsqueeze(0)
         concatenated_states = torch.cat((hidden, cell), dim=-1)
         concatenated_states = self.layer_norm(concatenated_states)
         concatenated_states = self.dropout(concatenated_states)
@@ -65,36 +73,66 @@ class DecoderLstm(nn.Module):
         num_layers (int, optional): Number of LSTM layers. Default is 1.
     """
     def __init__(self, vocab_size, embed_size, hidden_size, latent_size, dropout_prob=0.2, layer_norm=False,
-                 num_layers=1):
+                 num_layers=1, ALSTM=False, bidirectional=False):
         super().__init__()
         self.hidden_size = hidden_size
+        self.num_layers = num_layers
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.lstm = nn.LSTM(embed_size, latent_size, num_layers=num_layers, batch_first=True)
-        self.fc = nn.Linear(latent_size, vocab_size)
+        self.lstm = nn.LSTM(embed_size, hidden_size, num_layers=num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_size, vocab_size)
+        self.fc_hidden = nn.Linear(latent_size, hidden_size)
+        self.fc_cell   = nn.Linear(latent_size, hidden_size)
         self.dropout = nn.Dropout(dropout_prob)
-        self.layer_norm = nn.LayerNorm(latent_size) if layer_norm else nn.Identity()
+        self.layer_norm = nn.LayerNorm(hidden_size) if layer_norm else nn.Identity()
+        self.bidirectional = bidirectional
+        direction = 2 if self.bidirectional else 1
+        self.ALSTM = ALSTM
+        if ALSTM:
+            self.att_gate = nn.Linear(embed_size + latent_size * direction, embed_size)
 
-    def forward(self, x, z):
+
+    def init_hidden(self, z):
+        if z.shape[0] < self.num_layers:
+            h0 = torch.tanh(self.fc_hidden(z).repeat(self.num_layers, 1, 1))
+            c0 = torch.tanh(self.fc_cell(z).repeat(self.num_layers, 1, 1))
+        else:
+            h0 = torch.tanh(self.fc_hidden(z))
+            c0 = torch.tanh(self.fc_cell(z))
+        return h0, c0
+
+    def forward(self, x, hidden_cell):
         """
         Forward pass for the decoder.
 
         Args:
             x (Tensor): Input tensor of shape (batch_size, sequence_length).
-            z (Tensor): Latent vector of shape (batch_size, latent_size * 2).
+            hidden_cell (Tensor): Tuple of hidden and cell states of shape (batch_size, hidden_size).
 
         Returns:
             out (Tensor): Output tensor of shape (batch_size, sequence_length, vocab_size).
-            hidden_cell (Tensor): Concatenated hidden and cell states of shape (batch_size, hidden_size * 2).
+            hidden_cell (Tensor): Tuple of hidden and cell states of shape (batch_size, hidden_size).
         """
         out = self.embedding(x)
-        hidden, cell = torch.chunk(z, chunks=2, dim=-1)
+        (hidden, cell) = hidden_cell
         hidden, cell = hidden.contiguous(), cell.contiguous()
+        if self.ALSTM:
+            # Compute attention weights based on hidden state
+            # Expand hidden to match sequence dimension
+            if self.bidirectional:
+                h_forward = hidden[-2]
+                h_backward = hidden[-1]
+                last_hidden = torch.cat([h_forward, h_backward], dim=-1)
+            else:
+                last_hidden = hidden[-1]
+            hidden_expanded = last_hidden.unsqueeze(1).expand(-1, out.size(1), -1)
+            combined = torch.cat([out, hidden_expanded], dim=-1)
+            gate = torch.sigmoid(self.att_gate(combined))
+            out = out * gate  # weighted input
         out, (hidden, cell) = self.lstm(out, (hidden, cell))
         out = self.layer_norm(out)
         out = self.dropout(out)
         out = self.fc(out).reshape(out.size(0), -1)
-        hidden_cell = torch.cat((hidden, cell), dim=-1)
-        return out, hidden_cell
+        return out, (hidden, cell)
 
 
 class FFNN(nn.Module):
@@ -103,17 +141,19 @@ class FFNN(nn.Module):
 
     Args:
         input_dim (int): Dimension of the input features.
-        dropout_prob (float, optional): Dropout probability. Default is 0.
-        layer_norm (bool, optional): Whether to apply layer normalization. Default is False.
+        dropout_prob_cl (float, optional): Dropout probability. Default is 0.
+        norm_cl (bool, optional): Whether to apply batch normalization. Default is False.
     """
     def __init__(self, input_dim, dropout_prob_cl=0, norm_cl=False):
         super(FFNN, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 256)
-        self.fc2 = nn.Linear(256, 64)
-        self.fc3 = nn.Linear(64, 1)
+        h1 = 256
+        h2 = 64
+        self.fc1 = nn.Linear(input_dim, h1)
+        self.fc2 = nn.Linear(h1, h2)
+        self.fc3 = nn.Linear(h2, 1)
         self.dropout = nn.Dropout(dropout_prob_cl)
-        self.norm1 = nn.BatchNorm1d(256) if norm_cl else nn.Identity()
-        self.norm2 = nn.BatchNorm1d(64) if norm_cl else nn.Identity()
+        self.norm1 = nn.BatchNorm1d(h1) if norm_cl else nn.Identity()
+        self.norm2 = nn.BatchNorm1d(h2) if norm_cl else nn.Identity()
 
     def forward(self, x):
         x = x[-1]

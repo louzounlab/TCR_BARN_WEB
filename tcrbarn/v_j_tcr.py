@@ -1,3 +1,5 @@
+import pandas as pd
+
 
 def v_j_format(gene, levels, gene_name):
     """
@@ -10,7 +12,7 @@ def v_j_format(gene, levels, gene_name):
         str: The formatted gene name.
     """
     # Handle special cases where the gene is missing or invalid
-    if gene in ["~", "nan", "", "NA"]:
+    if pd.isna(gene) or gene in ["~", "nan", "", "NA"]:
         return "~"
 
     if gene_name == "TRBV":
